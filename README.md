@@ -1,4 +1,4 @@
-**ServerPulse** — Open Source Discord Analytics Bot
+# **ServerPulse** — Open Source Discord Analytics Bot
 Real-time insights & AI-powered summaries, directly in Discord
 
 ***
