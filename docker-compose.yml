@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  serverpulse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: serverpulse-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/serverpulse
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - serverpulse-network
+
+  mongodb:
+    image: mongo:6.0
+    container_name: serverpulse-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=serverpulse
+    volumes:
+      - mongo_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - serverpulse-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: serverpulse-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - serverpulse-network
+
+  # Optional: Redis Commander for debugging
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: serverpulse-redis-commander
+    hostname: redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - serverpulse-network
+    profiles:
+      - debug
+
+volumes:
+  mongo_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  serverpulse-network:
+    driver: bridge
