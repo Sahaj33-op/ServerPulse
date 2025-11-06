@@ -1,23 +1,22 @@
-"""Administrative commands for ServerPulse."""
+"""Admin and management commands for ServerPulse."""
+
+import json
+from datetime import datetime
+from typing import Optional, Dict, Any
 
 import discord
-from discord.ext import commands
 from discord import app_commands
-from typing import Optional, Literal, List
-from datetime import datetime
-import json
-import csv
-import io
+from discord.ext import commands
 
 from src.config import settings, AIProvider
+from src.utils.helpers import format_number, format_time_duration
 from src.utils.logger import LoggerMixin
-from src.utils.helpers import format_number, get_alert_emoji
 
 
 class AdminCommands(commands.Cog, LoggerMixin):
-    """Administrative and configuration commands."""
+    """Administrative and management commands."""
     
-    def __init__(self, bot):
+    def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db = bot.db_manager
         self.redis = bot.redis_manager
@@ -26,24 +25,33 @@ class AdminCommands(commands.Cog, LoggerMixin):
     @app_commands.command(name="toggle-alert", description="Enable or disable specific alert types")
     @app_commands.describe(
         alert_type="Type of alert to toggle",
-        enabled="Whether to enable or disable the alert"
+        enabled="Enable (True) or disable (False) the alert"
     )
+    @app_commands.choices(alert_type=[
+        app_commands.Choice(name="Join Raid Detection", value="join_raid"),
+        app_commands.Choice(name="Activity Drop Alert", value="activity_drop"),
+        app_commands.Choice(name="Mass Message Deletion", value="mass_delete"),
+        app_commands.Choice(name="Voice Channel Surge", value="voice_surge")
+    ])
     @app_commands.default_permissions(administrator=True)
-    async def toggle_alert(self, interaction: discord.Interaction,
-                          alert_type: Literal['join_raid', 'activity_drop', 'mass_delete', 'voice_surge'],
-                          enabled: bool):
-        """Toggle alert types on/off."""
-        await interaction.response.defer(ephemeral=True)
-        
-        guild_settings = await self.db.get_guild_settings(interaction.guild.id)
-        if not guild_settings:
-            await interaction.followup.send(
-                "❌ Please run `/setup` first!",
+    async def toggle_alert(self, interaction: discord.Interaction, 
+                          alert_type: str, enabled: bool) -> None:
+        """Toggle specific alert types on/off."""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ You need administrator permissions to manage alerts.",
                 ephemeral=True
             )
             return
         
-        # Update alert settings
+        guild_settings = await self.db.get_guild_settings(interaction.guild.id)
+        if not guild_settings:
+            await interaction.response.send_message(
+                "❌ Server not configured. Use `/setup` first.",
+                ephemeral=True
+            )
+            return
+        
         alerts_enabled = guild_settings.get('alerts_enabled', {})
         alerts_enabled[alert_type] = enabled
         
@@ -51,351 +59,533 @@ class AdminCommands(commands.Cog, LoggerMixin):
             'alerts_enabled': alerts_enabled
         })
         
-        # Format alert type for display
         alert_names = {
-            'join_raid': 'Join Raid',
-            'activity_drop': 'Activity Drop',
-            'mass_delete': 'Mass Deletion',
-            'voice_surge': 'Voice Surge'
+            'join_raid': 'Join Raid Detection',
+            'activity_drop': 'Activity Drop Alert',
+            'mass_delete': 'Mass Message Deletion',
+            'voice_surge': 'Voice Channel Surge'
         }
         
         status = "enabled" if enabled else "disabled"
-        emoji = get_alert_emoji(alert_type)
+        color = discord.Color.green() if enabled else discord.Color.red()
         
-        await interaction.followup.send(
-            f"✅ {emoji} **{alert_names[alert_type]}** alerts {status}!",
-            ephemeral=True
+        embed = discord.Embed(
+            title=f"⚙️ Alert Settings Updated",
+            description=f"**{alert_names[alert_type]}** has been {status}.",
+            color=color
         )
+        
+        # Show current alert status
+        alert_status = ""
+        for alert_key, alert_name in alert_names.items():
+            is_enabled = alerts_enabled.get(alert_key, True)
+            emoji = "✅" if is_enabled else "❌"
+            alert_status += f"{emoji} {alert_name}\n"
+        
+        embed.add_field(
+            name="Current Alert Status",
+            value=alert_status,
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     
-    @app_commands.command(name="set-threshold", description="Set custom alert thresholds")
+    @app_commands.command(name="ai-provider", description="Configure AI provider settings")
     @app_commands.describe(
-        alert_type="Type of alert to configure",
-        threshold="New threshold value"
+        action="Action to perform",
+        provider="AI provider to use",
+        api_key="API key for the selected provider"
+    )
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="Set Provider", value="set"),
+            app_commands.Choice(name="Add API Key", value="key"),
+            app_commands.Choice(name="Test Connection", value="test"),
+            app_commands.Choice(name="Show Status", value="status")
+        ],
+        provider=[
+            app_commands.Choice(name="OpenRouter", value="openrouter"),
+            app_commands.Choice(name="Gemini", value="gemini"),
+            app_commands.Choice(name="OpenAI", value="openai"),
+            app_commands.Choice(name="Grok", value="grok")
+        ]
     )
     @app_commands.default_permissions(administrator=True)
-    async def set_threshold(self, interaction: discord.Interaction,
-                           alert_type: Literal['join_raid', 'activity_drop', 'mass_delete', 'voice_surge'],
-                           threshold: int):
-        """Set custom alert thresholds."""
-        await interaction.response.defer(ephemeral=True)
-        
-        # Validate threshold values
-        if threshold < 1:
-            await interaction.followup.send(
-                "❌ Threshold must be at least 1!",
+    async def ai_provider(self, interaction: discord.Interaction,
+                         action: str, provider: Optional[str] = None, 
+                         api_key: Optional[str] = None) -> None:
+        """Configure AI provider and API keys."""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ You need administrator permissions to configure AI settings.",
                 ephemeral=True
             )
             return
         
-        # Type-specific validation
-        if alert_type == 'join_raid' and threshold > 100:
-            await interaction.followup.send(
-                "⚠️ Join raid threshold over 100 might be too high for most servers.",
+        guild_settings = await self.db.get_guild_settings(interaction.guild.id)
+        if not guild_settings:
+            await interaction.response.send_message(
+                "❌ Server not configured. Use `/setup` first.",
                 ephemeral=True
             )
-        elif alert_type == 'activity_drop' and (threshold < 10 or threshold > 90):
-            await interaction.followup.send(
-                "⚠️ Activity drop threshold should be between 10-90%.",
+            return
+        
+        if action == "status":
+            await self._show_ai_status(interaction, guild_settings)
+        elif action == "set":
+            if not provider:
+                await interaction.response.send_message(
+                    "❌ Please specify a provider when setting.",
+                    ephemeral=True
+                )
+                return
+            await self._set_ai_provider(interaction, provider)
+        elif action == "key":
+            if not provider or not api_key:
+                await interaction.response.send_message(
+                    "❌ Please specify both provider and API key.",
+                    ephemeral=True
+                )
+                return
+            await self._set_api_key(interaction, provider, api_key)
+        elif action == "test":
+            if not provider:
+                await interaction.response.send_message(
+                    "❌ Please specify a provider to test.",
+                    ephemeral=True
+                )
+                return
+            await self._test_ai_provider(interaction, provider)
+    
+    async def _show_ai_status(self, interaction: discord.Interaction, 
+                            guild_settings: Dict[str, Any]) -> None:
+        """Show current AI configuration status."""
+        embed = discord.Embed(
+            title="🤖 AI Provider Status",
+            color=discord.Color.blue()
+        )
+        
+        current_provider = guild_settings.get('ai_provider', 'Not set')
+        api_keys = guild_settings.get('ai_api_keys', {})
+        
+        embed.add_field(
+            name="Current Provider",
+            value=f"**{current_provider.title()}**" if current_provider != 'Not set' else "Not configured",
+            inline=False
+        )
+        
+        # API key status
+        key_status = ""
+        providers = ['openrouter', 'gemini', 'openai', 'grok']
+        
+        for provider in providers:
+            has_key = provider in api_keys and api_keys[provider]
+            emoji = "✅" if has_key else "❌"
+            key_status += f"{emoji} {provider.title()}\n"
+        
+        embed.add_field(
+            name="API Keys",
+            value=key_status,
+            inline=True
+        )
+        
+        # AI features status
+        digest_freq = guild_settings.get('digest_frequency', 'none')
+        features_status = (
+            f"📅 **Reports:** {digest_freq.title()}\n"
+            f"🧠 **Insights:** {'Enabled' if digest_freq != 'none' else 'Disabled'}"
+        )
+        
+        embed.add_field(
+            name="AI Features",
+            value=features_status,
+            inline=True
+        )
+        
+        embed.add_field(
+            name="Configure AI",
+            value=(
+                "`/ai-provider set <provider>` - Set active provider\n"
+                "`/ai-provider key <provider> <key>` - Add API key\n"
+                "`/ai-provider test <provider>` - Test connection"
+            ),
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    async def _set_ai_provider(self, interaction: discord.Interaction, provider: str) -> None:
+        """Set the active AI provider."""
+        await self.db.upsert_guild_settings(interaction.guild.id, {
+            'ai_provider': provider
+        })
+        
+        embed = discord.Embed(
+            title="✅ AI Provider Updated",
+            description=f"Active AI provider set to **{provider.title()}**.",
+            color=discord.Color.green()
+        )
+        
+        embed.add_field(
+            name="Next Steps",
+            value=(
+                f"1. Add your {provider.title()} API key:\n"
+                f"   `/ai-provider key {provider} YOUR_API_KEY`\n\n"
+                f"2. Test the connection:\n"
+                f"   `/ai-provider test {provider}`\n\n"
+                f"3. Enable reports with `/set-digest daily` or `/set-digest weekly`"
+            ),
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    async def _set_api_key(self, interaction: discord.Interaction, provider: str, api_key: str) -> None:
+        """Set API key for a provider."""
+        guild_settings = await self.db.get_guild_settings(interaction.guild.id)
+        api_keys = guild_settings.get('ai_api_keys', {})
+        api_keys[provider] = api_key
+        
+        await self.db.upsert_guild_settings(interaction.guild.id, {
+            'ai_api_keys': api_keys
+        })
+        
+        embed = discord.Embed(
+            title="✅ API Key Added",
+            description=f"API key for **{provider.title()}** has been saved securely.",
+            color=discord.Color.green()
+        )
+        
+        embed.add_field(
+            name="Security Note",
+            value="API keys are encrypted and stored securely. Only server administrators can modify them.",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="Test Your Setup",
+            value=f"Use `/ai-provider test {provider}` to verify the connection works.",
+            inline=False
+        )
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+    async def _test_ai_provider(self, interaction: discord.Interaction, provider: str) -> None:
+        """Test AI provider connection."""
+        await interaction.response.defer(ephemeral=True)
+        
+        guild_settings = await self.db.get_guild_settings(interaction.guild.id)
+        api_keys = guild_settings.get('ai_api_keys', {})
+        
+        if provider not in api_keys or not api_keys[provider]:
+            embed = discord.Embed(
+                title="❌ No API Key",
+                description=f"No API key found for {provider.title()}.",
+                color=discord.Color.red()
+            )
+            embed.add_field(
+                name="Add API Key",
+                value=f"Use `/ai-provider key {provider} YOUR_API_KEY` to add one.",
+                inline=False
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        try:
+            # Test the AI provider
+            test_result = await self.ai_manager.test_provider(
+                provider, api_keys[provider]
+            )
+            
+            if test_result['success']:
+                embed = discord.Embed(
+                    title="✅ Connection Successful",
+                    description=f"{provider.title()} is working correctly!",
+                    color=discord.Color.green()
+                )
+                
+                if 'model' in test_result:
+                    embed.add_field(
+                        name="Model Info",
+                        value=f"Using: {test_result['model']}",
+                        inline=False
+                    )
+            else:
+                embed = discord.Embed(
+                    title="❌ Connection Failed",
+                    description=f"Could not connect to {provider.title()}.",
+                    color=discord.Color.red()
+                )
+                
+                if 'error' in test_result:
+                    embed.add_field(
+                        name="Error Details",
+                        value=test_result['error'][:500],
+                        inline=False
+                    )
+        
+        except Exception as e:
+            embed = discord.Embed(
+                title="❌ Test Failed",
+                description=f"An error occurred while testing {provider.title()}.",
+                color=discord.Color.red()
+            )
+            embed.add_field(
+                name="Error",
+                value=str(e)[:500],
+                inline=False
+            )
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    
+    @app_commands.command(name="export-report", description="Export server analytics data")
+    @app_commands.describe(
+        format_type="Export format",
+        period="Time period to export"
+    )
+    @app_commands.choices(
+        format_type=[
+            app_commands.Choice(name="JSON", value="json"),
+            app_commands.Choice(name="CSV", value="csv")
+        ],
+        period=[
+            app_commands.Choice(name="Last 24 Hours", value="24h"),
+            app_commands.Choice(name="Last 7 Days", value="7d"),
+            app_commands.Choice(name="Last 30 Days", value="30d"),
+            app_commands.Choice(name="All Time", value="all")
+        ]
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def export_report(self, interaction: discord.Interaction,
+                           format_type: str = "json", period: str = "7d") -> None:
+        """Export analytics data."""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ You need administrator permissions to export data.",
                 ephemeral=True
             )
+            return
+        
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get comprehensive data
+            stats = await self.bot.analytics_manager.get_server_stats(
+                interaction.guild.id, period
+            )
+            leaderboard = await self.bot.analytics_manager.get_leaderboard(
+                interaction.guild.id, period, limit=50
+            )
+            channel_comparison = await self.bot.analytics_manager.get_channel_comparison(
+                interaction.guild.id, period
+            )
+            
+            export_data = {
+                'server_name': interaction.guild.name,
+                'server_id': interaction.guild.id,
+                'export_period': period,
+                'export_timestamp': datetime.utcnow().isoformat(),
+                'stats': stats,
+                'leaderboard': leaderboard,
+                'channel_comparison': channel_comparison
+            }
+            
+            if format_type == "json":
+                content = json.dumps(export_data, indent=2, default=str)
+                filename = f"serverpulse_export_{interaction.guild.id}_{period}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            else:  # CSV format
+                import csv
+                import io
+                
+                output = io.StringIO()
+                writer = csv.writer(output)
+                
+                # Write leaderboard data
+                writer.writerow(['Rank', 'User ID', 'Messages', 'Avg Length'])
+                for i, user in enumerate(leaderboard, 1):
+                    writer.writerow([
+                        i, user['user_id'], user['message_count'], 
+                        user.get('avg_length', 0)
+                    ])
+                
+                content = output.getvalue()
+                filename = f"serverpulse_export_{interaction.guild.id}_{period}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            # Create file
+            file = discord.File(
+                io.StringIO(content),
+                filename=filename
+            )
+            
+            embed = discord.Embed(
+                title="📊 Data Export Complete",
+                description=f"Analytics data exported for {period} period.",
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(
+                name="Export Details",
+                value=(
+                    f"📅 **Period:** {period}\n"
+                    f"📝 **Format:** {format_type.upper()}\n"
+                    f"📊 **Records:** {len(leaderboard)} users"
+                ),
+                inline=False
+            )
+            
+            await interaction.followup.send(embed=embed, file=file, ephemeral=True)
+            
+        except Exception as e:
+            self.logger.error(f"Error exporting data: {e}")
+            await interaction.followup.send(
+                "❌ An error occurred while exporting data. Please try again.",
+                ephemeral=True
+            )
+    
+    @app_commands.command(name="pulse-now", description="Generate an AI report immediately")
+    @app_commands.default_permissions(administrator=True)
+    async def pulse_now(self, interaction: discord.Interaction) -> None:
+        """Generate immediate AI report."""
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ You need administrator permissions to generate reports.",
+                ephemeral=True
+            )
+            return
+        
+        await interaction.response.defer()
         
         guild_settings = await self.db.get_guild_settings(interaction.guild.id)
         if not guild_settings:
             await interaction.followup.send(
-                "❌ Please run `/setup` first!",
+                "❌ Server not configured. Use `/setup` first.",
                 ephemeral=True
             )
             return
         
-        # Update threshold
-        alert_thresholds = guild_settings.get('alert_thresholds', {})
-        alert_thresholds[alert_type] = threshold
+        # Check if AI is configured
+        ai_provider = guild_settings.get('ai_provider')
+        api_keys = guild_settings.get('ai_api_keys', {})
         
-        await self.db.upsert_guild_settings(interaction.guild.id, {
-            'alert_thresholds': alert_thresholds
-        })
-        
-        # Format response
-        threshold_descriptions = {
-            'join_raid': f"{threshold} joins per minute",
-            'activity_drop': f"{threshold}% decrease in activity",
-            'mass_delete': f"{threshold} deletions in 30 seconds",
-            'voice_surge': f"{threshold}x normal voice activity"
-        }
-        
-        await interaction.followup.send(
-            f"✅ {alert_type.replace('_', ' ').title()} threshold set to: **{threshold_descriptions[alert_type]}**",
-            ephemeral=True
-        )
-    
-    @app_commands.command(name="set-digest", description="Configure AI digest frequency")
-    @app_commands.describe(frequency="How often to generate AI digest reports")
-    @app_commands.default_permissions(administrator=True)
-    async def set_digest(self, interaction: discord.Interaction,
-                        frequency: Literal['daily', 'weekly', 'disabled']):
-        """Configure AI digest report frequency."""
-        await interaction.response.defer(ephemeral=True)
-        
-        await self.db.upsert_guild_settings(interaction.guild.id, {
-            'digest_frequency': frequency
-        })
-        
-        if frequency == 'disabled':
-            await interaction.followup.send(
-                "🤖 AI digest reports disabled.",
-                ephemeral=True
+        if not ai_provider or ai_provider not in api_keys:
+            embed = discord.Embed(
+                title="❌ AI Not Configured",
+                description="AI provider not set up. Configure it first.",
+                color=discord.Color.red()
             )
-        else:
-            await interaction.followup.send(
-                f"🤖 AI digest reports will be generated **{frequency}**.",
-                ephemeral=True
+            embed.add_field(
+                name="Setup AI",
+                value="Use `/ai-provider set <provider>` and `/ai-provider key <provider> <key>` to configure.",
+                inline=False
             )
-    
-    @app_commands.command(name="pulse-now", description="Generate an instant AI-powered server report")
-    @app_commands.describe(period="Time period to analyze")
-    async def pulse_now(self, interaction: discord.Interaction,
-                       period: Literal['24h', '7d', '30d'] = '24h'):
-        """Generate instant AI report."""
-        await interaction.response.defer()
-        
-        guild_settings = await self.db.get_guild_settings(interaction.guild.id)
-        if not guild_settings or not guild_settings.get('setup_completed', False):
-            await interaction.followup.send(
-                "❌ Please run `/setup` first to configure ServerPulse!"
-            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
         
         try:
             # Generate AI report
-            report = await self.ai_manager.generate_instant_report(
-                interaction.guild.id, period, self.db
+            report = await self.ai_manager.generate_pulse_report(
+                interaction.guild.id, 
+                self.db,
+                period="24h"
             )
             
             if report:
                 embed = discord.Embed(
-                    title=f"🧠 ServerPulse AI Report - {interaction.guild.name}",
-                    description=report,
-                    color=discord.Color.blue(),
-                    timestamp=datetime.utcnow()
+                    title="🤖 AI Pulse Report Generated",
+                    description="Report has been sent to your updates channel.",
+                    color=discord.Color.green()
                 )
-                
-                embed.set_footer(
-                    text=f"Generated by AI | Period: {period} | Instant Report"
-                )
-                
-                await interaction.followup.send(embed=embed)
-                
-                # Save report to database
-                await self.db.save_ai_report(
-                    interaction.guild.id,
-                    'instant',
-                    report,
-                    {'period': period, 'requested_by': interaction.user.id}
-                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
             else:
                 await interaction.followup.send(
-                    "❌ Could not generate AI report. Please check your AI configuration and try again."
-                )
-        
-        except Exception as e:
-            self.logger.error(f"Error generating instant report: {e}", exc_info=True)
-            await interaction.followup.send(
-                "❌ An error occurred while generating the report. Please try again later."
-            )
-    
-    @app_commands.command(name="export-report", description="Export analytics data as CSV or JSON")
-    @app_commands.describe(
-        format="Export format",
-        period="Time period to export",
-        data_type="Type of data to export"
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def export_report(self, interaction: discord.Interaction,
-                           format: Literal['csv', 'json'],
-                           period: Literal['24h', '7d', '30d', 'all'] = '7d',
-                           data_type: Literal['messages', 'leaderboard', 'summary'] = 'summary'):
-        """Export analytics data."""
-        await interaction.response.defer(ephemeral=True)
-        
-        guild_settings = await self.db.get_guild_settings(interaction.guild.id)
-        if not guild_settings or not guild_settings.get('setup_completed', False):
-            await interaction.followup.send(
-                "❌ Please run `/setup` first!",
-                ephemeral=True
-            )
-            return
-        
-        try:
-            if data_type == 'leaderboard':
-                data = await self._export_leaderboard_data(interaction.guild.id, period)
-            elif data_type == 'summary':
-                data = await self._export_summary_data(interaction.guild.id, period)
-            else:
-                await interaction.followup.send(
-                    "❌ Message-level data export is not available to protect user privacy.",
+                    "❌ Failed to generate AI report. Check AI provider configuration.",
                     ephemeral=True
                 )
-                return
-            
-            if not data:
-                await interaction.followup.send(
-                    "❌ No data available for the selected period.",
-                    ephemeral=True
-                )
-                return
-            
-            # Generate file
-            if format == 'csv':
-                file_content = self._generate_csv(data, data_type)
-                filename = f"{interaction.guild.name}_{data_type}_{period}.csv"
-                file = discord.File(io.StringIO(file_content), filename=filename)
-            else:
-                file_content = json.dumps(data, indent=2, default=str)
-                filename = f"{interaction.guild.name}_{data_type}_{period}.json"
-                file = discord.File(io.StringIO(file_content), filename=filename)
-            
-            await interaction.followup.send(
-                f"📊 **{data_type.title()}** data exported for **{period}** period.",
-                file=file,
-                ephemeral=True
-            )
-        
+                
         except Exception as e:
-            self.logger.error(f"Error exporting data: {e}", exc_info=True)
+            self.logger.error(f"Error generating pulse report: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while exporting data.",
+                "❌ An error occurred while generating the report. Please try again.",
                 ephemeral=True
             )
     
-    @app_commands.command(name="config", description="View current ServerPulse configuration")
-    @app_commands.default_permissions(administrator=True)
-    async def view_config(self, interaction: discord.Interaction):
-        """Display current server configuration."""
-        await interaction.response.defer(ephemeral=True)
-        
+    @app_commands.command(name="server-info", description="Show ServerPulse configuration and status")
+    async def server_info(self, interaction: discord.Interaction) -> None:
+        """Show current ServerPulse configuration."""
         guild_settings = await self.db.get_guild_settings(interaction.guild.id)
-        if not guild_settings:
-            await interaction.followup.send(
-                "❌ ServerPulse is not configured for this server. Run `/setup` to get started!",
-                ephemeral=True
-            )
-            return
         
         embed = discord.Embed(
-            title="⚙️ ServerPulse Configuration",
-            description=f"Current settings for **{interaction.guild.name}**",
+            title=f"📊 ServerPulse Status - {interaction.guild.name}",
             color=discord.Color.blue(),
             timestamp=datetime.utcnow()
         )
         
-        # Basic setup
-        setup_status = "✅ Complete" if guild_settings.get('setup_completed', False) else "❌ Incomplete"
-        update_channel = guild_settings.get('update_channel_id')
-        
-        embed.add_field(
-            name="📋 Basic Setup",
-            value=f"**Status:** {setup_status}\n"
-                  f"**Update Channel:** {f'<#{update_channel}>' if update_channel else 'Not set'}\n"
-                  f"**Tracked Channels:** {len(guild_settings.get('tracked_channels', []))}",
-            inline=True
-        )
-        
-        # Alert configuration
-        alerts_enabled = guild_settings.get('alerts_enabled', {})
-        alert_thresholds = guild_settings.get('alert_thresholds', {})
-        
-        alerts_text = ""
-        for alert_type in ['join_raid', 'activity_drop', 'mass_delete', 'voice_surge']:
-            enabled = alerts_enabled.get(alert_type, True)
-            threshold = alert_thresholds.get(alert_type, 'Default')
-            status_emoji = "✅" if enabled else "❌"
+        if not guild_settings or not guild_settings.get('setup_completed', False):
+            embed.description = "❌ ServerPulse is not configured for this server."
+            embed.add_field(
+                name="Get Started",
+                value="Use `/setup` to configure ServerPulse for your server.",
+                inline=False
+            )
+        else:
+            # Configuration status
+            update_channel_id = guild_settings.get('update_channel_id')
+            update_channel = self.bot.get_channel(update_channel_id) if update_channel_id else None
             
-            alerts_text += f"{status_emoji} {alert_type.replace('_', ' ').title()}: {threshold}\n"
-        
-        embed.add_field(
-            name="🔔 Alert Settings",
-            value=alerts_text,
-            inline=True
-        )
-        
-        # AI configuration
-        ai_provider = guild_settings.get('ai_provider', settings.ai_provider)
-        digest_frequency = guild_settings.get('digest_frequency', 'weekly')
-        ai_keys = guild_settings.get('ai_api_keys', {})
-        
-        embed.add_field(
-            name="🤖 AI Configuration",
-            value=f"**Provider:** {ai_provider}\n"
-                  f"**Digest:** {digest_frequency}\n"
-                  f"**API Keys:** {len(ai_keys)} configured",
-            inline=True
-        )
-        
-        # Data retention
-        embed.add_field(
-            name="💾 Data Settings",
-            value=f"**Retention:** {settings.data_retention_days} days\n"
-                  f"**Cache TTL:** {settings.cache_ttl_leaderboard}s (leaderboard)\n"
-                  f"**Created:** {guild_settings.get('created_at', 'Unknown')}",
-            inline=False
-        )
-        
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    
-    async def _export_leaderboard_data(self, guild_id: int, period: str) -> List[dict]:
-        """Export leaderboard data."""
-        leaderboard = await self.bot.analytics_manager.get_leaderboard(
-            guild_id, period, limit=100
-        )
-        
-        # Add usernames for CSV export
-        guild = self.bot.get_guild(guild_id)
-        if guild:
-            for entry in leaderboard:
-                member = guild.get_member(entry['user_id'])
-                entry['username'] = member.display_name if member else 'Unknown User'
-                entry['user_id_str'] = str(entry['user_id'])
-        
-        return leaderboard
-    
-    async def _export_summary_data(self, guild_id: int, period: str) -> dict:
-        """Export summary statistics."""
-        stats = await self.bot.analytics_manager.get_server_stats(guild_id, period)
-        channel_comparison = await self.bot.analytics_manager.get_channel_comparison(guild_id, period)
-        
-        # Add channel names
-        guild = self.bot.get_guild(guild_id)
-        if guild:
-            for channel_data in channel_comparison:
-                channel = guild.get_channel(channel_data['channel_id'])
-                channel_data['channel_name'] = channel.name if channel else 'Unknown'
-        
-        return {
-            'server_stats': stats,
-            'channel_breakdown': channel_comparison,
-            'export_timestamp': datetime.utcnow().isoformat(),
-            'period': period
-        }
-    
-    def _generate_csv(self, data: List[dict], data_type: str) -> str:
-        """Generate CSV content from data."""
-        output = io.StringIO()
-        
-        if data_type == 'leaderboard' and data:
-            writer = csv.DictWriter(output, fieldnames=['rank', 'username', 'user_id_str', 'message_count', 'avg_length'])
-            writer.writeheader()
+            tracked_channels = guild_settings.get('tracked_channels', [])
+            alerts_enabled = guild_settings.get('alerts_enabled', {})
             
-            for i, entry in enumerate(data, 1):
-                writer.writerow({
-                    'rank': i,
-                    'username': entry.get('username', 'Unknown'),
-                    'user_id_str': entry.get('user_id_str', str(entry['user_id'])),
-                    'message_count': entry['message_count'],
-                    'avg_length': round(entry.get('avg_length', 0), 1)
-                })
+            embed.add_field(
+                name="⚙️ Configuration",
+                value=(
+                    f"📢 **Update Channel:** {update_channel.mention if update_channel else 'Not set'}\n"
+                    f"📊 **Tracked Channels:** {len(tracked_channels)}\n"
+                    f"📅 **Digest:** {guild_settings.get('digest_frequency', 'none').title()}"
+                ),
+                inline=True
+            )
+            
+            # Alert status
+            alert_count = sum(1 for enabled in alerts_enabled.values() if enabled)
+            embed.add_field(
+                name="🔔 Alerts",
+                value=f"{alert_count}/4 alert types enabled",
+                inline=True
+            )
+            
+            # AI status
+            ai_provider = guild_settings.get('ai_provider', 'Not set')
+            api_keys = guild_settings.get('ai_api_keys', {})
+            ai_configured = ai_provider in api_keys if ai_provider != 'Not set' else False
+            
+            embed.add_field(
+                name="🤖 AI Integration",
+                value=(
+                    f"🎨 **Provider:** {ai_provider.title() if ai_provider != 'Not set' else 'None'}\n"
+                    f"🔑 **API Key:** {'Configured' if ai_configured else 'Not set'}"
+                ),
+                inline=True
+            )
+            
+            # Bot uptime
+            uptime = datetime.utcnow() - self.bot.start_time
+            embed.add_field(
+                name="🕰️ Bot Status",
+                value=(
+                    f"✅ **Online**\n"
+                    f"🕰️ **Uptime:** {format_time_duration(int(uptime.total_seconds()))}\n"
+                    f"🏗️ **Servers:** {len(self.bot.guilds)}"
+                ),
+                inline=False
+            )
         
-        return output.getvalue()
+        embed.set_footer(
+            text=f"ServerPulse v1.0.0 • Requested by {interaction.user.display_name}",
+            icon_url=self.bot.user.display_avatar.url
+        )
+        
+        await interaction.response.send_message(embed=embed)
 
 
-async def setup(bot):
+async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(AdminCommands(bot))
