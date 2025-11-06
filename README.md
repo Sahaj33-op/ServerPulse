@@ -1,270 +1,201 @@
-# **ServerPulse** — Open Source Discord Analytics Bot
-Real-time insights & AI-powered summaries, directly in Discord
+# 🧠 ServerPulse  
+### Real-Time AI Discord Analytics Bot
 
-***
+![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)
+![Discord.py](https://img.shields.io/badge/discord.py-v2.4+-5865F2?logo=discord)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Docker](https://img.shields.io/badge/Docker-Supported-blue?logo=docker)
 
-## Overview
+> **ServerPulse** brings advanced analytics, live alerts, and AI-generated insights directly to your Discord server.
 
-ServerPulse is an open source Discord bot that delivers **real-time server analytics** and **AI-generated insights** without external dashboards. Admins get instant alerts, activity leaderboards, and weekly summaries—all inside Discord channels.
+---
 
-**Key differentiator**: AI-native design with multi-provider support (Gemini, OpenAI, Grok, OpenRouter). No locked-in APIs—bring your own keys.
+## 🌍 Overview
 
-***
+- ServerPulse continuously tracks your Discord server’s activity like messages, joins, reactions, and more, and turns that data into actionable insights.  
+- It’s powered by a multi-provider AI layer (Gemini, OpenAI, Grok, OpenRouter) that writes daily and weekly “Pulse Reports” right inside your Discord channel.
 
-## Core Features
+**Use it for:**  
+- 📈 Server growth tracking 
+- 🧩 Engagement analysis 
+- 💬 Community sentiment 
+- 🎯 Activity alerts
+
+---
+
+## ✨ Features
 
 ### ⚡ Real-Time Monitoring
-- Tracks messages, joins, leaves, reactions across whitelisted channels
-- Instant alerts for unusual activity (join raids, mass deletions, engagement drops)
-- Auto-posts to dedicated `#serverpulse-updates` channel
+- Tracks messages, joins/leaves, reactions, and voice activity
+- Detects spikes, drops, or raids instantly  
+- Sends alerts automatically to a configured `#serverpulse-updates` channel
 
-### 🏆 Activity Leaderboards
-- `/topmessagers [24h|7d|30d|all]` — most active members by message count
-- `/leaderboard #channel` — channel-specific rankings
-- Live updates without manual refresh
+### 🏆 Leaderboards & Engagement Stats
+- `/topmessagers [24h|7d|30d|all]` — show most active users  
+- `/leaderboard #channel` — per-channel rankings  
+- Cached via Redis for speed  
 
-### 🧠 AI-Powered Insights
-- Weekly "Pulse Report" with sentiment analysis, engagement trends, and admin suggestions
-- Pluggable AI adapter supporting multiple providers (Gemini, OpenAI, OpenRouter, Grok)
-- Per-guild provider selection with automatic fallback on rate limits
-- **Privacy-first**: only counts and sanitized summaries analyzed—no raw message content stored
+### 🧠 AI-Generated Insights
+- Weekly “Pulse Reports” with:
+  - Top users & busiest channels  
+  - Community sentiment breakdown  
+  - AI-suggested engagement improvements  
+- Supports **Gemini**, **OpenAI**, **OpenRouter**, and **Grok**  
+- Each guild can bring its own AI key  
 
-### 📊 Automated Digest System
-- Configurable frequency: hourly, daily, weekly, or disabled
-- Posts summaries with top users, busiest channels, emoji trends
-- AI-generated actionable recommendations ("Host events Fridays at 8 PM—peak activity time")
+### 🔔 Instant Alerts
+| Alert | Trigger | Example |
+|-------|----------|---------|
+| **Join Raid** | 10+ joins in 60 s | “⚠️ 12 members joined in under a minute!” |
+| **Activity Drop** | >50 % drop vs avg | “📉 Activity decreased 52 % since yesterday.” |
+| **Mass Deletion** | 5+ deletes in 30 s | “🧹 7 messages deleted rapidly.” |
+| **Voice Surge** | 3× more VC users | “🎙️ Voice channels suddenly active!” |
 
-### 🔒 Privacy & Data Control
-- Admins whitelist channels via `/add-collect-channel` (opt-in tracking)
-- 90-day retention policy (configurable)
-- No message content stored—only metadata (counts, timestamps, user IDs)
-- `/export-report` for GDPR compliance
+### 🔒 Privacy-First Design
+- No raw messages or attachments stored  
+- Only aggregated counts & IDs saved  
+- Channel tracking is opt-in (`/add-collect-channel`)  
+- Default retention: 90 days (configurable)  
 
-***
+---
 
-## Tech Stack
+## 🐳 One-Command Docker Deployment
 
-| Component | Technology | Why |
-|-----------|-----------|-----|
-| **Language** | Python 3.11+ | Mature Discord ecosystem, easy async |
-| **Discord Library** | discord.py v2.4+ | Industry standard, slash commands built-in |
-| **Database** | MongoDB 6.0+ | Schema flexibility, one-command setup via Atlas free tier |
-| **Task Scheduler** | discord.ext.tasks | Native to discord.py, handles reconnects automatically |
-| **AI Integration** | Unified adapter | Abstracts Gemini/OpenAI/OpenRouter/Grok APIs |
-| **Deployment** | Self-hosted | VPS, Raspberry Pi, local machine—anywhere Python runs |
-
-***
-
-## Commands Reference
-
-| Command | Description |
-|---------|-------------|
-| `/setup` | Initial bot configuration wizard |
-| `/set-update-channel #channel` | Choose where bot posts reports |
-| `/add-collect-channel #channel` | Enable tracking for channel |
-| `/remove-collect-channel #channel` | Disable tracking |
-| `/topmessagers [period]` | Show activity leaderboard |
-| `/leaderboard #channel` | Channel-specific stats |
-| `/toggle-alert <type> <on/off>` | Configure alert types (raid, drop, deletion) |
-| `/set-digest <frequency>` | Set report schedule (hourly/daily/weekly/none) |
-| `/ai-provider set <provider>` | Choose AI model (gemini/openai/grok/openrouter) |
-| `/ai-provider key <api_key>` | Store AI API key (encrypted in DB) |
-| `/export-report <format>` | Download CSV/JSON data export |
-
-***
-
-## Installation
-
-### Prerequisites
-- Python 3.11+
-- MongoDB (local or MongoDB Atlas free tier)
-- Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
-- AI API key (optional, for summaries)
-
-### Quick Start
+### 📦 Quick Start
 
 ```bash
-# Clone repository
-git clone https://github.com/sahaj33-op/serverpulse.git
-cd serverpulse
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
+git clone https://github.com/Sahaj33-op/ServerPulse.git
+cd ServerPulse
 cp .env.example .env
-# Edit .env with your bot token and MongoDB URI
+# Edit your BOT_TOKEN and (optionally) AI keys
+docker compose up --build -d
+````
 
-# Run bot
-python -m serverpulse
+That’s it. ServerPulse, MongoDB, and Redis will start together automatically.
+
+---
+
+## ⚙️ Environment Variables
+
+| Variable             | Description                                                    |
+| -------------------- | -------------------------------------------------------------- |
+| `BOT_TOKEN`          | Discord bot token                                              |
+| `MONGODB_URI`        | MongoDB connection string                                      |
+| `REDIS_URL`          | Redis connection string                                        |
+| `AI_PROVIDER`        | Default AI provider (`openrouter`, `gemini`, `openai`, `grok`) |
+| `OPENAI_API_KEY`     | Optional OpenAI key                                            |
+| `GEMINI_API_KEY`     | Optional Gemini key                                            |
+| `GROK_API_KEY`       | Optional Grok key                                              |
+| `OPENROUTER_API_KEY` | Optional OpenRouter key                                        |
+
+See `.env.example` for template.
+
+---
+
+## 🧩 Commands
+
+| Command                            | Description                  |
+| ---------------------------------- | ---------------------------- |
+| `/setup`                           | Interactive setup wizard     |
+| `/set-update-channel #channel`     | Choose where updates post    |
+| `/add-collect-channel #channel`    | Start tracking a channel     |
+| `/remove-collect-channel #channel` | Stop tracking                |
+| `/topmessagers [period]`           | Display activity leaderboard |
+| `/leaderboard #channel`            | Channel-specific stats       |
+| `/toggle-alert <type>`             | Enable/disable alert         |
+| `/set-digest <freq>`               | Configure digest schedule    |
+| `/pulse-now`                       | Generate report instantly    |
+| `/export-report`                   | Export analytics (CSV/JSON)  |
+
+---
+
+## 🧠 Architecture
+
+```
+┌──────────────────────────┐
+│ discord.py Event Stream  │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│  Metrics Collector       │
+│  (messages, joins, etc.) │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ MongoDB + Redis Cache    │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ AI Adapter Layer         │
+│ (Gemini / OpenAI / ...)  │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ Discord Update Channel   │
+│ (reports + alerts)       │
+└──────────────────────────┘
 ```
 
-### MongoDB Setup (Free)
+---
 
-1. Create [MongoDB Atlas](https://www.mongodb.com/cloud/atlas/register) account (no credit card)
-2. Create free cluster (512MB storage)
-3. Add IP whitelist: `0.0.0.0/0` (allow all) or your server IP
-4. Get connection string: `mongodb+srv://user:pass@cluster.mongodb.net/`
-5. Paste into `.env` as `MONGODB_URI`
+## 🧰 Developer Commands
 
-***
+| Action      | Command                                   |
+| ----------- | ----------------------------------------- |
+| Start stack | `docker compose up -d`                    |
+| Stop stack  | `docker compose down`                     |
+| View logs   | `docker compose logs -f serverpulse`      |
+| Rebuild     | `docker compose build --no-cache`         |
+| Wipe DB     | `docker volume rm serverpulse_mongo_data` |
 
-## Architecture
+---
 
-### Database Collections
+## 🛠️ Tech Stack
 
-**guild_settings**
-```python
-{
-  "guild_id": int,
-  "update_channel_id": int,
-  "whitelisted_channels": [int],
-  "alerts_enabled": {"raid": bool, "drop": bool, "deletion": bool},
-  "digest_frequency": str,  # "hourly", "daily", "weekly", "none"
-  "ai_provider": str,  # "gemini", "openai", "grok", "openrouter"
-  "ai_key_encrypted": str
-}
-```
+* **Language:** Python 3.11+
+* **Framework:** discord.py v2
+* **Database:** MongoDB 6 + Redis
+* **Scheduler:** discord.ext.tasks.loop
+* **AI Layer:** Gemini / OpenAI / OpenRouter / Grok
+* **Containerization:** Docker + Compose
 
-**hourly_metrics**
-```python
-{
-  "guild_id": int,
-  "channel_id": int,
-  "timestamp": datetime,
-  "message_count": int,
-  "reaction_count": int,
-  "unique_users": [int]
-}
-```
+---
 
-**leaderboard_cache**
-```python
-{
-  "guild_id": int,
-  "period": str,  # "24h", "7d", "30d", "all"
-  "rankings": [{"user_id": int, "count": int}],
-  "last_updated": datetime
-}
-```
+## 🧭 Roadmap
 
-**ai_summaries**
-```python
-{
-  "guild_id": int,
-  "period": str,
-  "summary_text": str,
-  "generated_at": datetime,
-  "provider": str,
-  "token_count": int
-}
-```
+| Version  | Highlights                                        |
+| -------- | ------------------------------------------------- |
+| **v1.0** | Real-time analytics, AI summaries, Docker release |
+| **v1.1** | Voice analytics, custom thresholds                |
+| **v2.0** | `/askpulse` chatbot, predictive goals             |
 
-### AI Adapter Pattern
+---
 
-Unified interface for swapping AI providers:
+## 🤝 Contributing
 
-```python
-class AIProvider(ABC):
-    @abstractmethod
-    async def generate_summary(self, metrics: dict) -> str:
-        pass
+Pull requests welcome!
+Focus areas:
 
-class GeminiProvider(AIProvider): ...
-class OpenAIProvider(AIProvider): ...
-class GroqProvider(AIProvider): ...
-```
+* New AI integrations (Claude, Cohere)
+* Smarter anomaly detection
+* Localization / translations
+* Enhanced metrics visualization
 
-Per-guild provider selection with automatic fallback on rate limits. Caches recent summaries to reduce API costs.
+See **CONTRIBUTING.md** for details.
 
-***
+---
 
-## Alert System
+## 📜 License
 
-### Thresholds (Configurable per Guild)
+MIT License © 2025 [Sahaj Italiya](https://github.com/Sahaj33-op)
 
-| Alert Type | Default Trigger | Customizable |
-|-----------|----------------|--------------|
-| **Join Raid** | 10+ joins in 60 seconds | Yes |
-| **Activity Drop** | 50% decrease vs 24h average | Yes |
-| **Mass Deletion** | 5+ deletes in 30 seconds | Yes |
-| **Voice Surge** | 3x increase in VC users | Yes |
+---
 
-Alerts auto-post to updates channel with:
-- Event type and severity
-- Affected channels/users (anonymized if needed)
-- Timestamp and duration
-- Context (e.g., "Usually 50 messages/hour, now 15")
+## 💬 Support
 
-***
-
-## Privacy & Compliance
-
-**What We Store:**
-- Message counts, timestamps, channel/user IDs
-- Reaction counts and emoji types
-- Join/leave events
-- AI summaries (sanitized, no raw content)
-
-**What We DON'T Store:**
-- Message text content
-- Attachments or embeds
-- Voice chat audio
-- DMs or private channels (unless explicitly whitelisted)
-
-**Retention:**
-- Raw metrics: 90 days (configurable)
-- Leaderboards: 30 days
-- AI summaries: 180 days
-- Exports available anytime via `/export-report`
-
-***
-
-## Contributing
-
-We welcome contributions! Priority areas:
-
-- Additional AI provider integrations (Anthropic Claude, Cohere)
-- Advanced analytics (engagement scoring, churn prediction)
-- Web dashboard (optional companion app)
-- Localization (non-English language support)
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-***
-
-## Roadmap
-
-**v1.0 (Current)**
-- ✅ Real-time tracking & alerts
-- ✅ Leaderboards & digest system
-- ✅ Multi-provider AI adapter
-
-**v1.1 (Next 3 months)**
-- Voice channel analytics
-- Custom alert threshold configuration
-- Historical trend comparisons
-
-**v2.0 (Future)**
-- AI chatbot mode (`/askpulse "Why is engagement down?"`)
-- Engagement goal predictions
-- Multi-server dashboard (manage 10+ guilds)
-
-***
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
-***
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/serverpulse/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/serverpulse/discussions)
-- **Discord**: [Join our support server](https://discord.gg/yourlink)
-
-***
-
-**ServerPulse** — Your server's AI brain, fully open source.
-No dashboards, no vendor lock-in — just smart insights where your community lives.
+* Issues → [GitHub Issues](https://github.com/Sahaj33-op/ServerPulse/issues)
+* Email → [sahajitaliya33@gmail.com](mailto:sahajitaliya33@gmail.com)
