@@ -37,6 +37,7 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         
         # Start background tasks
         self.cleanup_task.start()
+        self.hourly_reports_task.start()
         self.daily_reports_task.start()
         self.weekly_reports_task.start()
     
@@ -48,6 +49,8 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         await self.load_extension('src.commands.setup')
         await self.load_extension('src.commands.analytics')
         await self.load_extension('src.commands.admin')
+        await self.load_extension('src.commands.task_monitoring')
+        await self.load_extension('src.commands.voice_analytics') 
         
         # Sync slash commands if in development
         if settings.developer_guild_id:
@@ -186,8 +189,8 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         )
     
     async def on_voice_state_update(self, member: discord.Member, 
-                                  before: discord.VoiceState, 
-                                  after: discord.VoiceState) -> None:
+                              before: discord.VoiceState, 
+                              after: discord.VoiceState) -> None:
         """Handle voice state changes."""
         # Joining voice channel
         if before.channel is None and after.channel is not None:
@@ -196,6 +199,12 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
                 member.id,
                 after.channel.id,
                 'join'
+            )
+            # Start tracking voice session
+            await self.db_manager.start_voice_session(
+                member.guild.id,
+                member.id,
+                after.channel.id
             )
             await self.alert_manager.check_voice_surge_alert(member.guild.id)
         
@@ -207,6 +216,11 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
                 before.channel.id,
                 'leave'
             )
+            # End voice session tracking
+            await self.db_manager.end_voice_session(
+                member.guild.id,
+                member.id
+            )
         
         # Moving between voice channels
         elif before.channel != after.channel:
@@ -215,6 +229,13 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
                 member.id,
                 after.channel.id,
                 'move'
+            )
+            # End old session and start new one
+            await self.db_manager.end_voice_session(member.guild.id, member.id)
+            await self.db_manager.start_voice_session(
+                member.guild.id,
+                member.id,
+                after.channel.id
             )
     
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
@@ -303,15 +324,117 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         if not self.is_ready:
             return
         
-        self.logger.info("Running daily cleanup task")
+        task_name = "cleanup_task"
+        self.logger.info(f"Running {task_name}")
         
         try:
+            # Store task start time
+            await self.redis_manager.set(
+                f"task:{task_name}:last_attempt",
+                datetime.utcnow().isoformat(),
+                ex=7 * 24 * 3600  # Keep for 7 days
+            )
+            
             # Clean up old data based on retention policy
             cleanup_stats = await self.db_manager.cleanup_old_data(settings.data_retention_days)
             self.logger.info(f"Cleanup completed: {cleanup_stats}")
             
+            # Store success timestamp
+            await self.redis_manager.set(
+                f"task:{task_name}:last_success",
+                datetime.utcnow().isoformat(),
+                ex=7 * 24 * 3600
+            )
+            await self.redis_manager.incr(f"task:{task_name}:success_count")
+            
         except Exception as e:
-            self.logger.error(f"Error in cleanup task: {e}", exc_info=True)
+            self.logger.error(f"Error in {task_name}: {e}", exc_info=True)
+            
+            # Store failure info
+            await self.redis_manager.set(
+                f"task:{task_name}:last_error",
+                str(e),
+                ex=7 * 24 * 3600
+            )
+            await self.redis_manager.incr(f"task:{task_name}:error_count")
+            
+            # Don't crash the task loop - let it retry next cycle
+    
+    @tasks.loop(hours=1)
+    async def hourly_reports_task(self) -> None:
+        """Generate and send hourly reports."""
+        if not self.is_ready:
+            return
+        
+        task_name = "hourly_reports_task"
+        self.logger.info(f"Running {task_name}")
+        
+        try:
+            # Store task start time
+            await self.redis_manager.set(
+                f"task:{task_name}:last_attempt",
+                datetime.utcnow().isoformat(),
+                ex=7 * 24 * 3600
+            )
+            
+            success_count = 0
+            error_count = 0
+            
+            for guild in self.guilds:
+                try:
+                    guild_settings = await self.db_manager.get_guild_settings(guild.id)
+                    
+                    if not guild_settings or not guild_settings.get('setup_completed', False):
+                        continue
+                    
+                    # Generate AI report if enabled and configured
+                    if guild_settings.get('digest_frequency') == 'hourly':
+                        report_embed = await self.ai_manager.generate_hourly_report(
+                            guild.id, 
+                            self.db_manager,
+                            guild.name
+                        )
+                        
+                        # Send to update channel if report was generated
+                        if report_embed and guild_settings.get('update_channel_id'):
+                            channel = guild.get_channel(guild_settings['update_channel_id'])
+                            if channel:
+                                try:
+                                    await channel.send(embed=report_embed)
+                                    self.logger.info(f"Sent hourly report to guild {guild.id}")
+                                    success_count += 1
+                                except Exception as e:
+                                    self.logger.error(f"Failed to send hourly report to guild {guild.id}: {e}")
+                                    error_count += 1
+                                    
+                except Exception as e:
+                    self.logger.error(f"Error processing guild {guild.id} in hourly reports: {e}")
+                    error_count += 1
+                    # Continue with next guild
+            
+            # Store success timestamp and stats
+            await self.redis_manager.set(
+                f"task:{task_name}:last_success",
+                datetime.utcnow().isoformat(),
+                ex=7 * 24 * 3600
+            )
+            await self.redis_manager.incrby(f"task:{task_name}:success_count", success_count)
+            
+            if error_count > 0:
+                await self.redis_manager.incrby(f"task:{task_name}:error_count", error_count)
+            
+            self.logger.info(f"{task_name} completed: {success_count} success, {error_count} errors")
+                    
+        except Exception as e:
+            self.logger.error(f"Critical error in {task_name}: {e}", exc_info=True)
+            
+            # Store failure info
+            await self.redis_manager.set(
+                f"task:{task_name}:last_error",
+                str(e),
+                ex=7 * 24 * 3600
+            )
+            await self.redis_manager.incr(f"task:{task_name}:critical_error_count")
     
     @tasks.loop(hours=24)
     async def daily_reports_task(self) -> None:
@@ -319,35 +442,75 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         if not self.is_ready:
             return
         
-        self.logger.info("Running daily reports task")
+        task_name = "daily_reports_task"
+        self.logger.info(f"Running {task_name}")
         
         try:
+            # Store task start time
+            await self.redis_manager.set(
+                f"task:{task_name}:last_attempt",
+                datetime.utcnow().isoformat(),
+                ex=7 * 24 * 3600
+            )
+            
+            success_count = 0
+            error_count = 0
+            
             for guild in self.guilds:
-                guild_settings = await self.db_manager.get_guild_settings(guild.id)
-                
-                if not guild_settings or not guild_settings.get('setup_completed', False):
-                    continue
-                
-                # Generate AI report if enabled and configured
-                if guild_settings.get('digest_frequency') == 'daily':
-                    report_embed = await self.ai_manager.generate_daily_report(
-                        guild.id, 
-                        self.db_manager,
-                        guild.name
-                    )
+                try:
+                    guild_settings = await self.db_manager.get_guild_settings(guild.id)
                     
-                    # Send to update channel if report was generated
-                    if report_embed and guild_settings.get('update_channel_id'):
-                        channel = guild.get_channel(guild_settings['update_channel_id'])
-                        if channel:
-                            try:
-                                await channel.send(embed=report_embed)
-                                self.logger.info(f"Sent daily report to guild {guild.id}")
-                            except Exception as e:
-                                self.logger.error(f"Failed to send daily report to guild {guild.id}: {e}")
+                    if not guild_settings or not guild_settings.get('setup_completed', False):
+                        continue
+                    
+                    # Generate AI report if enabled and configured
+                    if guild_settings.get('digest_frequency') == 'daily':
+                        report_embed = await self.ai_manager.generate_daily_report(
+                            guild.id, 
+                            self.db_manager,
+                            guild.name
+                        )
+                        
+                        # Send to update channel if report was generated
+                        if report_embed and guild_settings.get('update_channel_id'):
+                            channel = guild.get_channel(guild_settings['update_channel_id'])
+                            if channel:
+                                try:
+                                    await channel.send(embed=report_embed)
+                                    self.logger.info(f"Sent daily report to guild {guild.id}")
+                                    success_count += 1
+                                except Exception as e:
+                                    self.logger.error(f"Failed to send daily report to guild {guild.id}: {e}")
+                                    error_count += 1
+                                    
+                except Exception as e:
+                    self.logger.error(f"Error processing guild {guild.id} in daily reports: {e}")
+                    error_count += 1
+                    # Continue with next guild
+            
+            # Store success timestamp and stats
+            await self.redis_manager.set(
+                f"task:{task_name}:last_success",
+                datetime.utcnow().isoformat(),
+                ex=7 * 24 * 3600
+            )
+            await self.redis_manager.incrby(f"task:{task_name}:success_count", success_count)
+            
+            if error_count > 0:
+                await self.redis_manager.incrby(f"task:{task_name}:error_count", error_count)
+            
+            self.logger.info(f"{task_name} completed: {success_count} success, {error_count} errors")
                     
         except Exception as e:
-            self.logger.error(f"Error in daily reports task: {e}", exc_info=True)
+            self.logger.error(f"Critical error in {task_name}: {e}", exc_info=True)
+            
+            # Store failure info
+            await self.redis_manager.set(
+                f"task:{task_name}:last_error",
+                str(e),
+                ex=7 * 24 * 3600
+            )
+            await self.redis_manager.incr(f"task:{task_name}:critical_error_count")
     
     @tasks.loop(hours=168)  # 7 days
     async def weekly_reports_task(self) -> None:
@@ -355,35 +518,75 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         if not self.is_ready:
             return
         
-        self.logger.info("Running weekly reports task")
+        task_name = "weekly_reports_task"
+        self.logger.info(f"Running {task_name}")
         
         try:
+            # Store task start time
+            await self.redis_manager.set(
+                f"task:{task_name}:last_attempt",
+                datetime.utcnow().isoformat(),
+                ex=30 * 24 * 3600  # Keep for 30 days
+            )
+            
+            success_count = 0
+            error_count = 0
+            
             for guild in self.guilds:
-                guild_settings = await self.db_manager.get_guild_settings(guild.id)
-                
-                if not guild_settings or not guild_settings.get('setup_completed', False):
-                    continue
-                
-                # Generate AI report if enabled and configured  
-                if guild_settings.get('digest_frequency') == 'weekly':
-                    report_embed = await self.ai_manager.generate_weekly_report(
-                        guild.id, 
-                        self.db_manager,
-                        guild.name
-                    )
+                try:
+                    guild_settings = await self.db_manager.get_guild_settings(guild.id)
                     
-                    # Send to update channel if report was generated
-                    if report_embed and guild_settings.get('update_channel_id'):
-                        channel = guild.get_channel(guild_settings['update_channel_id'])
-                        if channel:
-                            try:
-                                await channel.send(embed=report_embed)
-                                self.logger.info(f"Sent weekly report to guild {guild.id}")
-                            except Exception as e:
-                                self.logger.error(f"Failed to send weekly report to guild {guild.id}: {e}")
+                    if not guild_settings or not guild_settings.get('setup_completed', False):
+                        continue
+                    
+                    # Generate AI report if enabled and configured  
+                    if guild_settings.get('digest_frequency') == 'weekly':
+                        report_embed = await self.ai_manager.generate_weekly_report(
+                            guild.id, 
+                            self.db_manager,
+                            guild.name
+                        )
+                        
+                        # Send to update channel if report was generated
+                        if report_embed and guild_settings.get('update_channel_id'):
+                            channel = guild.get_channel(guild_settings['update_channel_id'])
+                            if channel:
+                                try:
+                                    await channel.send(embed=report_embed)
+                                    self.logger.info(f"Sent weekly report to guild {guild.id}")
+                                    success_count += 1
+                                except Exception as e:
+                                    self.logger.error(f"Failed to send weekly report to guild {guild.id}: {e}")
+                                    error_count += 1
+                                    
+                except Exception as e:
+                    self.logger.error(f"Error processing guild {guild.id} in weekly reports: {e}")
+                    error_count += 1
+                    # Continue with next guild
+            
+            # Store success timestamp and stats
+            await self.redis_manager.set(
+                f"task:{task_name}:last_success",
+                datetime.utcnow().isoformat(),
+                ex=30 * 24 * 3600
+            )
+            await self.redis_manager.incrby(f"task:{task_name}:success_count", success_count)
+            
+            if error_count > 0:
+                await self.redis_manager.incrby(f"task:{task_name}:error_count", error_count)
+            
+            self.logger.info(f"{task_name} completed: {success_count} success, {error_count} errors")
                     
         except Exception as e:
-            self.logger.error(f"Error in weekly reports task: {e}", exc_info=True)
+            self.logger.error(f"Critical error in {task_name}: {e}", exc_info=True)
+            
+            # Store failure info
+            await self.redis_manager.set(
+                f"task:{task_name}:last_error",
+                str(e),
+                ex=30 * 24 * 3600
+            )
+            await self.redis_manager.incr(f"task:{task_name}:critical_error_count")
     
     
     async def close(self) -> None:
@@ -392,6 +595,7 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         
         # Cancel background tasks
         self.cleanup_task.cancel()
+        self.hourly_reports_task.cancel()
         self.daily_reports_task.cancel()
         self.weekly_reports_task.cancel()
         

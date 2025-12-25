@@ -137,6 +137,10 @@ class AIManager(LoggerMixin):
         """Generate weekly AI report."""
         return await self.generate_pulse_report(guild_id, db_manager, "7d", guild_name)
     
+    async def generate_hourly_report(self, guild_id: int, db_manager, guild_name: str = None) -> Optional[discord.Embed]:
+        """Generate hourly AI report (lightweight version for frequent updates)."""
+        return await self.generate_pulse_report(guild_id, db_manager, "1h", guild_name)
+    
     async def _gather_analytics_data(self, guild_id: int, db_manager, period: str) -> Dict[str, Any]:
         """Gather comprehensive analytics data for AI processing."""
         from src.utils.helpers import get_period_hours

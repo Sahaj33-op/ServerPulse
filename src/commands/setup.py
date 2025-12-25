@@ -347,6 +347,7 @@ class SetupCommands(commands.Cog, LoggerMixin):
     @app_commands.describe(frequency="How often to send AI reports")
     @app_commands.choices(frequency=[
         app_commands.Choice(name="None (Disable)", value="none"),
+        app_commands.Choice(name="Hourly", value="hourly"),
         app_commands.Choice(name="Daily", value="daily"),
         app_commands.Choice(name="Weekly", value="weekly")
     ])
