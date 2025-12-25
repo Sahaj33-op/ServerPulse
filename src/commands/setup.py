@@ -89,6 +89,9 @@ class SetupCommands(commands.Cog, LoggerMixin):
             inline=False
         )
         
+        # Store reference to parent cog for nested classes
+        parent_cog = self
+        
         # Step 1: Update Channel Selection
         class UpdateChannelSelect(discord.ui.Select):
             def __init__(self):
@@ -126,12 +129,12 @@ class SetupCommands(commands.Cog, LoggerMixin):
                 selected_channel_id = int(select_interaction.data['values'][0])
                 
                 # Save update channel
-                await self.db.upsert_guild_settings(guild_id, {
+                await parent_cog.db.upsert_guild_settings(guild_id, {
                     'update_channel_id': selected_channel_id
                 })
                 
                 # Create or find the dedicated updates channel
-                updates_channel = await self._ensure_updates_channel(interaction.guild)
+                updates_channel = await parent_cog._ensure_updates_channel(interaction.guild)
                 
                 embed = discord.Embed(
                     title="✅ Update Channel Set",
@@ -141,7 +144,7 @@ class SetupCommands(commands.Cog, LoggerMixin):
                 )
                 
                 # Step 2: Channel tracking selection
-                tracking_view = ChannelTrackingView(guild_id, self.db)
+                tracking_view = ChannelTrackingView(guild_id, parent_cog.db)
                 
                 embed.add_field(
                     name="Next: Select Channels to Track",

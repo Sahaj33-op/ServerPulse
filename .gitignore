@@ -290,3 +290,9 @@ public
 # Temporary folders
 tmp/
 temp/
+
+_bmad/
+.agent/
+.claude/
+.gemini/
+Docs/

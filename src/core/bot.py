@@ -38,6 +38,7 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         # Start background tasks
         self.cleanup_task.start()
         self.daily_reports_task.start()
+        self.weekly_reports_task.start()
     
     async def setup_hook(self) -> None:
         """Setup hook called when bot is starting up."""
@@ -334,8 +335,31 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         except Exception as e:
             self.logger.error(f"Error in daily reports task: {e}", exc_info=True)
     
+    @tasks.loop(hours=168)  # 7 days
+    async def weekly_reports_task(self) -> None:
+        """Generate and send weekly reports."""
+        if not self.is_ready:
+            return
+        
+        self.logger.info("Running weekly reports task")
+        
+        try:
+            for guild in self.guilds:
+                guild_settings = await self.db_manager.get_guild_settings(guild.id)
+                
+                if not guild_settings or not guild_settings.get('setup_completed', False):
+                    continue
+                
+                # Generate AI report if enabled and configured  
+                if guild_settings.get('digest_frequency') == 'weekly':
+                    await self.ai_manager.generate_weekly_report(guild.id, self.db_manager)
+                    
+        except Exception as e:
+            self.logger.error(f"Error in weekly reports task: {e}", exc_info=True)
+    
     @cleanup_task.before_loop
     @daily_reports_task.before_loop
+    @weekly_reports_task.before_loop
     async def before_loops(self) -> None:
         """Wait for bot to be ready before starting loops."""
         await self.wait_until_ready()
@@ -348,6 +372,7 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
         # Cancel background tasks
         self.cleanup_task.cancel()
         self.daily_reports_task.cancel()
+        self.weekly_reports_task.cancel()
         
         # Close managers
         if hasattr(self, 'ai_manager'):
