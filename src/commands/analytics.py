@@ -352,6 +352,9 @@ class AnalyticsCommands(commands.Cog, LoggerMixin):
             inline=True
         )
         
+        # Visual separator
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="\u200b", inline=False)
+
         # Member activity
         joins = member_activity.get('joins', 0)
         leaves = member_activity.get('leaves', 0)
@@ -370,6 +373,10 @@ class AnalyticsCommands(commands.Cog, LoggerMixin):
             inline=True
         )
         
+        # Visual separator
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="\u200b", inline=False)
+
+
         # Activity analysis
         activity_score = stats.get('activity_score', 0)
         anomaly = stats.get('anomaly')
@@ -392,6 +399,10 @@ class AnalyticsCommands(commands.Cog, LoggerMixin):
             inline=False
         )
         
+        # Visual separator
+        embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="\u200b", inline=False)
+
+
         # Top channels by activity
         if channel_comparison:
             top_channels = channel_comparison[:5]  # Top 5

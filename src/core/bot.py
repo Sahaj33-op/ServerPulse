@@ -330,7 +330,21 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
                 
                 # Generate AI report if enabled and configured
                 if guild_settings.get('digest_frequency') == 'daily':
-                    await self.ai_manager.generate_daily_report(guild.id, self.db_manager)
+                    report_embed = await self.ai_manager.generate_daily_report(
+                        guild.id, 
+                        self.db_manager,
+                        guild.name
+                    )
+                    
+                    # Send to update channel if report was generated
+                    if report_embed and guild_settings.get('update_channel_id'):
+                        channel = guild.get_channel(guild_settings['update_channel_id'])
+                        if channel:
+                            try:
+                                await channel.send(embed=report_embed)
+                                self.logger.info(f"Sent daily report to guild {guild.id}")
+                            except Exception as e:
+                                self.logger.error(f"Failed to send daily report to guild {guild.id}: {e}")
                     
         except Exception as e:
             self.logger.error(f"Error in daily reports task: {e}", exc_info=True)
@@ -352,19 +366,26 @@ class ServerPulseBot(commands.Bot, LoggerMixin):
                 
                 # Generate AI report if enabled and configured  
                 if guild_settings.get('digest_frequency') == 'weekly':
-                    await self.ai_manager.generate_weekly_report(guild.id, self.db_manager)
+                    report_embed = await self.ai_manager.generate_weekly_report(
+                        guild.id, 
+                        self.db_manager,
+                        guild.name
+                    )
+                    
+                    # Send to update channel if report was generated
+                    if report_embed and guild_settings.get('update_channel_id'):
+                        channel = guild.get_channel(guild_settings['update_channel_id'])
+                        if channel:
+                            try:
+                                await channel.send(embed=report_embed)
+                                self.logger.info(f"Sent weekly report to guild {guild.id}")
+                            except Exception as e:
+                                self.logger.error(f"Failed to send weekly report to guild {guild.id}: {e}")
                     
         except Exception as e:
             self.logger.error(f"Error in weekly reports task: {e}", exc_info=True)
     
-    @cleanup_task.before_loop
-    @daily_reports_task.before_loop
-    @weekly_reports_task.before_loop
-    async def before_loops(self) -> None:
-        """Wait for bot to be ready before starting loops."""
-        await self.wait_until_ready()
-
-
+    
     async def close(self) -> None:
         """Cleanup when bot is shutting down."""
         self.logger.info("Shutting down ServerPulse Bot...")

@@ -14,7 +14,7 @@ class GeminiProvider(BaseAIProvider, LoggerMixin):
     
     def __init__(self):
         self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        self.model = "gemini-pro"
+        self.model = "gemini-2.5-flash"  # Updated to current Gemini model
     
     async def test_connection(self, session: aiohttp.ClientSession, api_key: str) -> Dict[str, Any]:
         """Test Gemini connection."""

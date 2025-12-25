@@ -1,18 +1,18 @@
-"""AI Manager for ServerPulse - Multi-provider AI integration."""
+"""AI Manager for ServerPulse - Handles AI provider integration and reporting."""
 
 import asyncio
-import json
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, Any, Optional
 
 import aiohttp
-from src.config import settings, AIProvider
+import discord
 from src.utils.logger import LoggerMixin
 from src.ai.providers.openai_provider import OpenAIProvider
 from src.ai.providers.gemini_provider import GeminiProvider
 from src.ai.providers.openrouter_provider import OpenRouterProvider
 from src.ai.providers.grok_provider import GrokProvider
 from src.ai.providers.base_provider import BaseAIProvider
+from src.ai.report_formatter import ReportFormatter
 
 
 class AIManager(LoggerMixin):
@@ -26,6 +26,7 @@ class AIManager(LoggerMixin):
             'grok': GrokProvider()
         }
         
+        self.formatter = ReportFormatter()
         self.session: Optional[aiohttp.ClientSession] = None
     
     async def _ensure_session(self) -> aiohttp.ClientSession:
@@ -57,8 +58,8 @@ class AIManager(LoggerMixin):
             return {'success': False, 'error': str(e)}
     
     async def generate_pulse_report(self, guild_id: int, db_manager, 
-                                  period: str = "24h") -> Optional[str]:
-        """Generate AI-powered pulse report."""
+                                  period: str = "24h", guild_name: str = None) -> Optional[discord.Embed]:
+        """Generate AI-powered pulse report as a Discord embed."""
         try:
             # Get guild settings
             guild_settings = await db_manager.get_guild_settings(guild_id)
@@ -76,24 +77,41 @@ class AIManager(LoggerMixin):
             analytics_data = await self._gather_analytics_data(guild_id, db_manager, period)
             
             if not analytics_data['has_activity']:
-                return await self._generate_no_activity_report(guild_id, analytics_data)
+                # Return no-activity embed
+                return self.formatter.create_no_activity_embed(
+                    analytics_data.get('period_display', period),
+                    analytics_data,
+                    guild_name
+                )
             
-            # Generate AI report
+            # Generate AI report (plain text)
             provider = self.providers[provider_name]
             session = await self._ensure_session()
             
-            report = await provider.generate_report(
+            report_text = await provider.generate_report(
                 session,
                 api_keys[provider_name],
                 analytics_data
             )
             
-            if report:
-                # Save report to database
+            if report_text:
+                # Parse sections from AI-generated text
+                sections = self.formatter.parse_sections(report_text)
+                
+                # Create rich embed from sections
+                period_display = analytics_data.get('period_display', period)
+                embed = self.formatter.create_report_embed(
+                    f"ServerPulse Report - {period_display}",
+                    sections,
+                   analytics_data,
+                    guild_name
+                )
+                
+                # Save report to database (still save text version)
                 await db_manager.save_ai_report(
                     guild_id,
                     'pulse_report',
-                    report,
+                    report_text,
                     {
                         'period': period,
                         'provider': provider_name,
@@ -104,20 +122,20 @@ class AIManager(LoggerMixin):
                     }
                 )
                 
-                return report
+                return embed
             
         except Exception as e:
             self.logger.error(f"Error generating pulse report for guild {guild_id}: {e}")
         
         return None
     
-    async def generate_daily_report(self, guild_id: int, db_manager) -> Optional[str]:
+    async def generate_daily_report(self, guild_id: int, db_manager, guild_name: str = None) -> Optional[discord.Embed]:
         """Generate daily AI report."""
-        return await self.generate_pulse_report(guild_id, db_manager, "24h")
+        return await self.generate_pulse_report(guild_id, db_manager, "24h", guild_name)
     
-    async def generate_weekly_report(self, guild_id: int, db_manager) -> Optional[str]:
+    async def generate_weekly_report(self, guild_id: int, db_manager, guild_name: str = None) -> Optional[discord.Embed]:
         """Generate weekly AI report."""
-        return await self.generate_pulse_report(guild_id, db_manager, "7d")
+        return await self.generate_pulse_report(guild_id, db_manager, "7d", guild_name)
     
     async def _gather_analytics_data(self, guild_id: int, db_manager, period: str) -> Dict[str, Any]:
         """Gather comprehensive analytics data for AI processing."""

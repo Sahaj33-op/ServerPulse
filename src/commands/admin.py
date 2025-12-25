@@ -369,6 +369,9 @@ class AdminCommands(commands.Cog, LoggerMixin):
         await interaction.response.defer(ephemeral=True)
         
         try:
+            import csv
+            import io
+            
             # Get comprehensive data
             stats = await self.bot.analytics_manager.get_server_stats(
                 interaction.guild.id, period
@@ -394,9 +397,6 @@ class AdminCommands(commands.Cog, LoggerMixin):
                 content = json.dumps(export_data, indent=2, default=str)
                 filename = f"serverpulse_export_{interaction.guild.id}_{period}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
             else:  # CSV format
-                import csv
-                import io
-                
                 output = io.StringIO()
                 writer = csv.writer(output)
                 
@@ -482,20 +482,38 @@ class AdminCommands(commands.Cog, LoggerMixin):
             return
         
         try:
-            # Generate AI report
-            report = await self.ai_manager.generate_pulse_report(
+            # Generate AI report (now returns Discord Embed)
+            report_embed = await self.ai_manager.generate_pulse_report(
                 interaction.guild.id, 
                 self.db,
-                period="24h"
+                period="24h",
+                guild_name=interaction.guild.name
             )
             
-            if report:
-                embed = discord.Embed(
-                    title="🤖 AI Pulse Report Generated",
-                    description="Report has been sent to your updates channel.",
-                    color=discord.Color.green()
-                )
-                await interaction.followup.send(embed=embed, ephemeral=True)
+            if report_embed:
+                # Send report to updates channel
+                update_channel_id = guild_settings.get('update_channel_id')
+                if update_channel_id:
+                    update_channel = interaction.guild.get_channel(update_channel_id)
+                    if update_channel:
+                        await update_channel.send(embed=report_embed)
+                        
+                        from src.utils.formatting_utils import create_success_embed
+                        success_embed = create_success_embed(
+                            "AI Pulse Report Sent",
+                            f"Report successfully delivered to {update_channel.mention}"
+                        )
+                        await interaction.followup.send(embed=success_embed, ephemeral=True)
+                    else:
+                        await interaction.followup.send(
+                            "❌ Update channel not found. Please reconfigure with `/setup`.",
+                            ephemeral=True
+                        )
+                else:
+                    await interaction.followup.send(
+                        "❌ No update channel configured. Please run `/setup` first.",
+                        ephemeral=True
+                    )
             else:
                 await interaction.followup.send(
                     "❌ Failed to generate AI report. Check AI provider configuration.",
@@ -545,6 +563,9 @@ class AdminCommands(commands.Cog, LoggerMixin):
                 inline=True
             )
             
+            # Visual separator
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="\u200b", inline=False)
+            
             # Alert status
             alert_count = sum(1 for enabled in alerts_enabled.values() if enabled)
             embed.add_field(
@@ -553,6 +574,9 @@ class AdminCommands(commands.Cog, LoggerMixin):
                 inline=True
             )
             
+            # Visual separator
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="\u200b", inline=False)
+
             # AI status
             ai_provider = guild_settings.get('ai_provider', 'Not set')
             api_keys = guild_settings.get('ai_api_keys', {})
@@ -567,6 +591,9 @@ class AdminCommands(commands.Cog, LoggerMixin):
                 inline=True
             )
             
+            # Visual separator
+            embed.add_field(name="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", value="\u200b", inline=False)
+
             # Bot uptime
             uptime = datetime.utcnow() - self.bot.start_time
             embed.add_field(
